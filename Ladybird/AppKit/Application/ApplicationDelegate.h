@@ -24,7 +24,7 @@
 
 - (nullable instancetype)init:(Vector<URL::URL>)initial_urls
                 newTabPageURL:(URL::URL)new_tab_page_url
-                withCookieJar:(WebView::CookieJar)cookie_jar
+                withCookieJar:(NonnullOwnPtr<WebView::CookieJar>)cookie_jar
             webContentOptions:(Ladybird::WebContentOptions const&)web_content_options
       webdriverContentIPCPath:(StringView)webdriver_content_ipc_path;
 
@@ -36,6 +36,9 @@
                                    url:(URL::URL const&)url
                                fromTab:(nullable Tab*)tab
                            activateTab:(Web::HTML::ActivateTab)activate_tab;
+
+- (void)setActiveTab:(nonnull Tab*)tab;
+- (nullable Tab*)activeTab;
 
 - (void)removeTab:(nonnull TabController*)controller;
 

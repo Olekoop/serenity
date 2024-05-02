@@ -2443,7 +2443,11 @@ Bytecode::CodeGenerationErrorOr<Optional<Bytecode::Operand>> TryStatement::gener
         auto& finalizer_block = generator.make_block();
         generator.switch_to_basic_block(finalizer_block);
         generator.emit<Bytecode::Op::LeaveUnwindContext>();
+
+        generator.start_boundary(Bytecode::Generator::BlockBoundaryType::LeaveFinally);
         (void)TRY(m_finalizer->generate_bytecode(generator));
+        generator.end_boundary(Bytecode::Generator::BlockBoundaryType::LeaveFinally);
+
         if (!generator.is_current_block_terminated()) {
             next_block = &generator.make_block();
             auto next_target = Bytecode::Label { *next_block };
@@ -2461,8 +2465,10 @@ Bytecode::CodeGenerationErrorOr<Optional<Bytecode::Operand>> TryStatement::gener
         auto caught_value = Bytecode::Operand { generator.allocate_register() };
         generator.emit<Bytecode::Op::Catch>(caught_value);
 
-        if (!m_finalizer)
+        if (!m_finalizer) {
             generator.emit<Bytecode::Op::LeaveUnwindContext>();
+            generator.emit<Bytecode::Op::RestoreScheduledJump>();
+        }
 
         // OPTIMIZATION: We avoid creating a lexical environment if the catch clause has no parameter.
         bool did_create_variable_scope_for_catch_clause = false;
@@ -2510,8 +2516,13 @@ Bytecode::CodeGenerationErrorOr<Optional<Bytecode::Operand>> TryStatement::gener
     if (m_finalizer)
         generator.end_boundary(Bytecode::Generator::BlockBoundaryType::ReturnToFinally);
     if (m_handler) {
-        if (!m_finalizer)
-            unwind_context.emplace(generator, OptionalNone());
+        if (!m_finalizer) {
+            auto const* parent_unwind_context = generator.current_unwind_context();
+            if (parent_unwind_context)
+                unwind_context.emplace(generator, parent_unwind_context->finalizer());
+            else
+                unwind_context.emplace(generator, OptionalNone());
+        }
         unwind_context->set_handler(handler_target.value());
     }
 

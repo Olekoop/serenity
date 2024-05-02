@@ -24,7 +24,7 @@
     URL::URL m_new_tab_page_url;
 
     // This will always be populated, but we cannot have a non-default constructible instance variable.
-    Optional<WebView::CookieJar> m_cookie_jar;
+    OwnPtr<WebView::CookieJar> m_cookie_jar;
 
     Ladybird::WebContentOptions m_web_content_options;
     Optional<StringView> m_webdriver_content_ipc_path;
@@ -35,6 +35,7 @@
 }
 
 @property (nonatomic, strong) NSMutableArray<TabController*>* managed_tabs;
+@property (nonatomic, strong) Tab* active_tab;
 
 @property (nonatomic, strong) TaskManagerController* task_manager_controller;
 
@@ -55,7 +56,7 @@
 
 - (instancetype)init:(Vector<URL::URL>)initial_urls
               newTabPageURL:(URL::URL)new_tab_page_url
-              withCookieJar:(WebView::CookieJar)cookie_jar
+              withCookieJar:(NonnullOwnPtr<WebView::CookieJar>)cookie_jar
           webContentOptions:(Ladybird::WebContentOptions const&)web_content_options
     webdriverContentIPCPath:(StringView)webdriver_content_ipc_path
 {
@@ -117,6 +118,16 @@
     [controller loadHTML:html url:url];
 
     return controller;
+}
+
+- (void)setActiveTab:(Tab*)tab
+{
+    self.active_tab = tab;
+}
+
+- (Tab*)activeTab
+{
+    return self.active_tab;
 }
 
 - (void)removeTab:(TabController*)controller
@@ -182,6 +193,10 @@
         if (activate_tab == Web::HTML::ActivateTab::No) {
             [tab orderFront:nil];
         }
+    }
+
+    if (activate_tab == Web::HTML::ActivateTab::Yes) {
+        [[controller window] orderFrontRegardless];
     }
 
     [self.managed_tabs addObject:controller];

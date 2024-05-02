@@ -2,6 +2,7 @@
  * Copyright (c) 2022-2023, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2023, Luke Wilde <lukew@serenityos.org>
  * Copyright (c) 2023, Sam Atkins <atkinssj@serenityos.org>
+ * Copyright (c) 2024, Jamie Mansfield <jmansfield@cadixdev.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -44,6 +45,7 @@
 #include <LibWeb/Platform/EventLoopPlugin.h>
 #include <LibWeb/ReferrerPolicy/AbstractOperations.h>
 #include <LibWeb/SRI/SRI.h>
+#include <LibWeb/SecureContexts/AbstractOperations.h>
 #include <LibWeb/WebIDL/DOMException.h>
 
 namespace Web::Fetch::Fetching {
@@ -1353,7 +1355,8 @@ WebIDL::ExceptionOr<JS::NonnullGCPtr<PendingResponse>> http_network_or_cache_fet
         // 12. Append a request `Origin` header for httpRequest.
         http_request->add_origin_header();
 
-        // FIXME: 13. Append the Fetch metadata headers for httpRequest.
+        // 13. Append the Fetch metadata headers for httpRequest.
+        append_fetch_metadata_headers_for_request(*http_request);
 
         // 14. If httpRequest’s header list does not contain `User-Agent`, then user agents should append
         //     (`User-Agent`, default `User-Agent` value) to httpRequest’s header list.
@@ -1990,6 +1993,135 @@ WebIDL::ExceptionOr<JS::NonnullGCPtr<PendingResponse>> cors_preflight_fetch(JS::
     });
 
     return returned_pending_response;
+}
+
+// https://w3c.github.io/webappsec-fetch-metadata/#abstract-opdef-set-dest
+void set_sec_fetch_dest_header(Infrastructure::Request& request)
+{
+    // 1. Assert: r’s url is a potentially trustworthy URL.
+    VERIFY(SecureContexts::is_url_potentially_trustworthy(request.url()) == SecureContexts::Trustworthiness::PotentiallyTrustworthy);
+
+    // 2. Let header be a Structured Header whose value is a token.
+    // FIXME: This is handled below, as Serenity doesn't have APIs for RFC 8941.
+
+    // 3. If r’s destination is the empty string, set header’s value to the string "empty". Otherwise, set header’s value to r’s destination.
+    ByteBuffer header_value;
+    if (!request.destination().has_value()) {
+        header_value = MUST(ByteBuffer::copy("empty"sv.bytes()));
+    } else {
+        header_value = MUST(ByteBuffer::copy(Infrastructure::request_destination_to_string(request.destination().value()).bytes()));
+    }
+
+    // 4. Set a structured field value `Sec-Fetch-Dest`/header in r’s header list.
+    auto header = Infrastructure::Header {
+        .name = MUST(ByteBuffer::copy("Sec-Fetch-Dest"sv.bytes())),
+        .value = move(header_value),
+    };
+    request.header_list()->append(move(header));
+}
+
+// https://w3c.github.io/webappsec-fetch-metadata/#abstract-opdef-set-dest
+void set_sec_fetch_mode_header(Infrastructure::Request& request)
+{
+    // 1. Assert: r’s url is a potentially trustworthy URL.
+    VERIFY(SecureContexts::is_url_potentially_trustworthy(request.url()) == SecureContexts::Trustworthiness::PotentiallyTrustworthy);
+
+    // 2. Let header be a Structured Header whose value is a token.
+    // FIXME: This is handled below, as Serenity doesn't have APIs for RFC 8941.
+
+    // 3. Set header’s value to r’s mode.
+    auto header_value = MUST(ByteBuffer::copy(Infrastructure::request_mode_to_string(request.mode()).bytes()));
+
+    // 4. Set a structured field value `Sec-Fetch-Mode`/header in r’s header list.
+    auto header = Infrastructure::Header {
+        .name = MUST(ByteBuffer::copy("Sec-Fetch-Mode"sv.bytes())),
+        .value = move(header_value),
+    };
+    request.header_list()->append(move(header));
+}
+
+// https://w3c.github.io/webappsec-fetch-metadata/#abstract-opdef-set-site
+void set_sec_fetch_site_header(Infrastructure::Request& request)
+{
+    // 1. Assert: r’s url is a potentially trustworthy URL.
+    VERIFY(SecureContexts::is_url_potentially_trustworthy(request.url()) == SecureContexts::Trustworthiness::PotentiallyTrustworthy);
+
+    // 2. Let header be a Structured Header whose value is a token.
+    // FIXME: This is handled below, as Serenity doesn't have APIs for RFC 8941.
+
+    // 3. Set header’s value to same-origin.
+    auto header_value = "same-origin"sv;
+
+    // FIXME: 4. If r is a navigation request that was explicitly caused by a user’s interaction with the user agent (by typing an address
+    //           into the user agent directly, for example, or by clicking a bookmark, etc.), then set header’s value to none.
+
+    // 5. If header’s value is not none, then for each url in r’s url list:
+    if (!header_value.equals_ignoring_ascii_case("none"sv)) {
+        for (auto& url : request.url_list()) {
+            // 1. If url is same origin with r’s origin, continue.
+            if (DOMURL::url_origin(url).is_same_origin(DOMURL::url_origin(request.current_url())))
+                continue;
+
+            // 2. Set header’s value to cross-site.
+            header_value = "cross-site"sv;
+
+            // FIXME: 3. If r’s origin is not same site with url’s origin, then break.
+
+            // FIXME: 4. Set header’s value to same-site.
+        }
+    }
+
+    // 6. Set a structured field value `Sec-Fetch-Site`/header in r’s header list.
+    auto header = Infrastructure::Header {
+        .name = MUST(ByteBuffer::copy("Sec-Fetch-Site"sv.bytes())),
+        .value = MUST(ByteBuffer::copy(header_value.bytes())),
+    };
+    request.header_list()->append(move(header));
+}
+
+// https://w3c.github.io/webappsec-fetch-metadata/#abstract-opdef-set-user
+void set_sec_fetch_user_header(Infrastructure::Request& request)
+{
+    // 1. Assert: r’s url is a potentially trustworthy URL.
+    VERIFY(SecureContexts::is_url_potentially_trustworthy(request.url()) == SecureContexts::Trustworthiness::PotentiallyTrustworthy);
+
+    // 2. If r is not a navigation request, or if r’s user-activation is false, return.
+    if (!request.is_navigation_request() || !request.user_activation())
+        return;
+
+    // 3. Let header be a Structured Header whose value is a token.
+    // FIXME: This is handled below, as Serenity doesn't have APIs for RFC 8941.
+
+    // 4. Set header’s value to true.
+    // NOTE: See https://datatracker.ietf.org/doc/html/rfc8941#name-booleans for boolean format in RFC 8941.
+    auto header_value = MUST(ByteBuffer::copy("?1"sv.bytes()));
+
+    // 5. Set a structured field value `Sec-Fetch-User`/header in r’s header list.
+    auto header = Infrastructure::Header {
+        .name = MUST(ByteBuffer::copy("Sec-Fetch-User"sv.bytes())),
+        .value = move(header_value),
+    };
+    request.header_list()->append(move(header));
+}
+
+// https://w3c.github.io/webappsec-fetch-metadata/#abstract-opdef-append-the-fetch-metadata-headers-for-a-request
+void append_fetch_metadata_headers_for_request(Infrastructure::Request& request)
+{
+    // 1. If r’s url is not an potentially trustworthy URL, return.
+    if (SecureContexts::is_url_potentially_trustworthy(request.url()) != SecureContexts::Trustworthiness::PotentiallyTrustworthy)
+        return;
+
+    // 2. Set the Sec-Fetch-Dest header for r.
+    set_sec_fetch_dest_header(request);
+
+    // 3. Set the Sec-Fetch-Mode header for r.
+    set_sec_fetch_mode_header(request);
+
+    // 4. Set the Sec-Fetch-Site header for r.
+    set_sec_fetch_site_header(request);
+
+    // 5. Set the Sec-Fetch-User header for r.
+    set_sec_fetch_user_header(request);
 }
 
 }

@@ -73,7 +73,7 @@ public:
     virtual ~Request() override;
 
     // ^BodyMixin
-    virtual ErrorOr<Optional<MimeSniff::MimeType>> mime_type_impl() const override;
+    virtual Optional<MimeSniff::MimeType> mime_type_impl() const override;
     virtual JS::GCPtr<Infrastructure::Body> body_impl() override;
     virtual JS::GCPtr<Infrastructure::Body const> body_impl() const override;
     virtual Bindings::PlatformObject& as_platform_object() override { return *this; }
@@ -82,11 +82,11 @@ public:
     [[nodiscard]] JS::NonnullGCPtr<Infrastructure::Request> request() const { return m_request; }
 
     // JS API functions
-    [[nodiscard]] WebIDL::ExceptionOr<String> method() const;
-    [[nodiscard]] WebIDL::ExceptionOr<String> url() const;
+    [[nodiscard]] String method() const;
+    [[nodiscard]] String url() const;
     [[nodiscard]] JS::NonnullGCPtr<Headers> headers() const;
     [[nodiscard]] Bindings::RequestDestination destination() const;
-    [[nodiscard]] WebIDL::ExceptionOr<String> referrer() const;
+    [[nodiscard]] String referrer() const;
     [[nodiscard]] Bindings::ReferrerPolicy referrer_policy() const;
     [[nodiscard]] Bindings::RequestMode mode() const;
     [[nodiscard]] Bindings::RequestCredentials credentials() const;

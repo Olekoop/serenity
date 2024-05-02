@@ -34,7 +34,9 @@ public:
 
     WebContentView& view() const { return m_current_tab->view(); }
 
+    int tab_count() { return m_tabs_container->count(); }
     int tab_index(Tab*);
+    Tab& create_new_tab(Web::HTML::ActivateTab activate_tab);
 
     QAction& go_back_action()
     {
@@ -54,6 +56,11 @@ public:
     QAction& new_tab_action()
     {
         return *m_new_tab_action;
+    }
+
+    QAction& new_window_action()
+    {
+        return *m_new_window_action;
     }
 
     QAction& copy_selection_action()
@@ -92,6 +99,7 @@ public slots:
     Tab& new_child_tab(Web::HTML::ActivateTab, Tab& parent, Web::HTML::WebViewHints, Optional<u64> page_index);
     void activate_tab(int index);
     void close_tab(int index);
+    void move_tab(int old_index, int new_index);
     void close_current_tab();
     void open_next_tab();
     void open_previous_tab();
@@ -117,7 +125,6 @@ private:
     virtual void wheelEvent(QWheelEvent*) override;
     virtual void closeEvent(QCloseEvent*) override;
 
-    Tab& create_new_tab(Web::HTML::ActivateTab activate_tab);
     Tab& create_new_tab(Web::HTML::ActivateTab, Tab& parent, Web::HTML::WebViewHints, Optional<u64> page_index);
     void initialize_tab(Tab*);
 
@@ -141,9 +148,6 @@ private:
     QString tool_tip_for_page_mute_state(Tab&) const;
     QTabBar::ButtonPosition audio_button_position_for_tab(int tab_index) const;
 
-    void show_task_manager_window();
-    void close_task_manager_window();
-
     QScreen* m_current_screen;
     double m_device_pixel_ratio { 0 };
 
@@ -155,6 +159,7 @@ private:
     QAction* m_go_forward_action { nullptr };
     QAction* m_reload_action { nullptr };
     QAction* m_new_tab_action { nullptr };
+    QAction* m_new_window_action { nullptr };
     QAction* m_copy_selection_action { nullptr };
     QAction* m_paste_action { nullptr };
     QAction* m_select_all_action { nullptr };
@@ -162,9 +167,6 @@ private:
     QAction* m_inspect_dom_node_action { nullptr };
 
     SettingsDialog* m_settings_dialog { nullptr };
-
-    // FIXME: This should be owned at a higher level in case we have multiple browser windows
-    TaskManagerWindow* m_task_manager_window { nullptr };
 
     WebView::CookieJar& m_cookie_jar;
 

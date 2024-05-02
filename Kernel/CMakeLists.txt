@@ -495,6 +495,7 @@ elseif("${SERENITY_ARCH}" STREQUAL "aarch64")
         Arch/aarch64/CPUID.cpp
         Arch/aarch64/CurrentTime.cpp
         Arch/aarch64/Dummy.cpp
+        Arch/aarch64/FPUState.S
         Arch/aarch64/InterruptManagement.cpp
         Arch/aarch64/Interrupts.cpp
         Arch/aarch64/kprintf.cpp
@@ -541,6 +542,7 @@ elseif("${SERENITY_ARCH}" STREQUAL "riscv64")
         Arch/riscv64/Delay.cpp
         Arch/riscv64/InterruptManagement.cpp
         Arch/riscv64/Interrupts.cpp
+        Arch/riscv64/Interrupts/PLIC.cpp
         Arch/riscv64/MMU.cpp
         Arch/riscv64/PageDirectory.cpp
         Arch/riscv64/Panic.cpp

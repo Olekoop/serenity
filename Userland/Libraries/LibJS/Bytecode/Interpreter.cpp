@@ -106,18 +106,6 @@ static ByteString format_value_list(StringView name, ReadonlySpan<Value> values)
     return builder.to_byte_string();
 }
 
-NonnullOwnPtr<CallFrame> CallFrame::create(size_t register_count)
-{
-    size_t allocation_size = sizeof(CallFrame) + sizeof(Value) * register_count;
-    auto* memory = malloc(allocation_size);
-    VERIFY(memory);
-    auto call_frame = adopt_own(*new (memory) CallFrame);
-    call_frame->register_count = register_count;
-    for (auto i = 0u; i < register_count; ++i)
-        new (&call_frame->register_values[i]) Value();
-    return call_frame;
-}
-
 ALWAYS_INLINE static ThrowCompletionOr<Value> loosely_inequals(VM& vm, Value src1, Value src2)
 {
     if (src1.tag() == src2.tag()) {
@@ -161,13 +149,6 @@ Interpreter::Interpreter(VM& vm)
 
 Interpreter::~Interpreter()
 {
-}
-
-void Interpreter::visit_edges(Cell::Visitor& visitor)
-{
-    for (auto& frame : m_call_frames) {
-        frame.visit([&](auto& value) { value->visit_edges(visitor); });
-    }
 }
 
 ALWAYS_INLINE Value Interpreter::get(Operand op) const
@@ -263,11 +244,11 @@ ThrowCompletionOr<Value> Interpreter::run(Script& script_record, JS::GCPtr<Envir
                 executable->dump();
 
             // a. Set result to the result of evaluating script.
-            auto result_or_error = run_and_return_frame(*executable, nullptr);
+            auto result_or_error = run_executable(*executable, nullptr);
             if (result_or_error.value.is_error())
                 result = result_or_error.value.release_error();
             else
-                result = result_or_error.frame->registers()[0];
+                result = result_or_error.return_register_value;
         }
     }
 
@@ -384,11 +365,9 @@ void Interpreter::run_bytecode()
                     do_return(saved_return_value());
                     break;
                 }
-                auto const* old_scheduled_jump = call_frame().previously_scheduled_jumps.take_last();
+                auto& running_execution_context = vm().running_execution_context();
+                auto const* old_scheduled_jump = running_execution_context.previously_scheduled_jumps.take_last();
                 if (m_scheduled_jump) {
-                    // FIXME: If we `break` or `continue` in the finally, we need to clear
-                    //        this field
-                    //        Same goes for popping an old_scheduled_jump form the stack
                     m_current_block = exchange(m_scheduled_jump, nullptr);
                 } else {
                     m_current_block = &static_cast<Op::ContinuePendingUnwind const&>(instruction).resume_target().block();
@@ -418,7 +397,8 @@ void Interpreter::run_bytecode()
                 if (!handler && !finalizer)
                     return;
 
-                auto& unwind_context = unwind_contexts().last();
+                auto& running_execution_context = vm().running_execution_context();
+                auto& unwind_context = running_execution_context.unwind_contexts.last();
                 VERIFY(unwind_context.executable == m_current_executable);
 
                 if (handler) {
@@ -427,11 +407,6 @@ void Interpreter::run_bytecode()
                 }
                 if (finalizer) {
                     m_current_block = finalizer;
-                    // If an exception was thrown inside the corresponding `catch` block, we need to rethrow it
-                    // from the `finally` block. But if the exception is from the `try` block, and has already been
-                    // handled by `catch`, we swallow it.
-                    if (!unwind_context.handler_called)
-                        reg(Register::exception()) = {};
                     goto start;
                 }
                 // An unwind context with no handler or finalizer? We have nowhere to jump, and continuing on will make us crash on the next `Call` to a non-native function if there's an exception! So let's crash here instead.
@@ -453,7 +428,8 @@ void Interpreter::run_bytecode()
         }
 
         if (auto const* finalizer = m_current_block->finalizer(); finalizer && !will_yield) {
-            auto& unwind_context = unwind_contexts().last();
+            auto& running_execution_context = vm().running_execution_context();
+            auto& unwind_context = running_execution_context.unwind_contexts.last();
             VERIFY(unwind_context.executable == m_current_executable);
             reg(Register::saved_return_value()) = reg(Register::return_value());
             reg(Register::return_value()) = {};
@@ -470,7 +446,7 @@ void Interpreter::run_bytecode()
     }
 }
 
-Interpreter::ValueAndFrame Interpreter::run_and_return_frame(Executable& executable, BasicBlock const* entry_point, CallFrame* in_frame)
+Interpreter::ResultAndReturnRegister Interpreter::run_executable(Executable& executable, BasicBlock const* entry_point)
 {
     dbgln_if(JS_BYTECODE_DEBUG, "Bytecode::Interpreter will run unit {:p}", &executable);
 
@@ -484,12 +460,13 @@ Interpreter::ValueAndFrame Interpreter::run_and_return_frame(Executable& executa
 
     TemporaryChange restore_current_block { m_current_block, entry_point ?: executable.basic_blocks.first() };
 
-    if (in_frame)
-        push_call_frame(in_frame);
-    else
-        push_call_frame(CallFrame::create(executable.number_of_registers));
+    auto& running_execution_context = vm().running_execution_context();
+    if (running_execution_context.registers.size() < executable.number_of_registers)
+        running_execution_context.registers.resize(executable.number_of_registers);
 
-    vm().execution_context_stack().last()->executable = &executable;
+    reg(Register::return_value()) = {};
+
+    running_execution_context.executable = &executable;
 
     run_bytecode();
 
@@ -513,59 +490,62 @@ Interpreter::ValueAndFrame Interpreter::run_and_return_frame(Executable& executa
         return_value = reg(Register::saved_return_value());
     auto exception = reg(Register::exception());
 
-    auto frame = pop_call_frame();
-
-    // NOTE: The return value from a called function is put into $0 in the caller context.
-    if (!m_call_frames.is_empty())
-        call_frame().registers()[0] = return_value;
-
     // At this point we may have already run any queued promise jobs via on_call_stack_emptied,
     // in which case this is a no-op.
     vm().run_queued_promise_jobs();
 
     vm().finish_execution_generation();
 
-    if (!exception.is_empty()) {
-        if (auto* call_frame = frame.get_pointer<NonnullOwnPtr<CallFrame>>())
-            return { throw_completion(exception), move(*call_frame) };
-        return { throw_completion(exception), nullptr };
-    }
-
-    if (auto* call_frame = frame.get_pointer<NonnullOwnPtr<CallFrame>>())
-        return { return_value, move(*call_frame) };
-    return { return_value, nullptr };
+    if (!exception.is_empty())
+        return { throw_completion(exception), vm().running_execution_context().registers[0] };
+    return { return_value, vm().running_execution_context().registers[0] };
 }
 
 void Interpreter::enter_unwind_context()
 {
-    unwind_contexts().empend(
+    auto& running_execution_context = vm().running_execution_context();
+    running_execution_context.unwind_contexts.empend(
         m_current_executable,
         vm().running_execution_context().lexical_environment);
-    call_frame().previously_scheduled_jumps.append(m_scheduled_jump);
+    running_execution_context.previously_scheduled_jumps.append(m_scheduled_jump);
     m_scheduled_jump = nullptr;
 }
 
 void Interpreter::leave_unwind_context()
 {
-    unwind_contexts().take_last();
+    auto& running_execution_context = vm().running_execution_context();
+    running_execution_context.unwind_contexts.take_last();
 }
 
 void Interpreter::catch_exception(Operand dst)
 {
     set(dst, reg(Register::exception()));
     reg(Register::exception()) = {};
-    auto& context = unwind_contexts().last();
+    auto& running_execution_context = vm().running_execution_context();
+    auto& context = running_execution_context.unwind_contexts.last();
     VERIFY(!context.handler_called);
     VERIFY(context.executable == &current_executable());
     context.handler_called = true;
     vm().running_execution_context().lexical_environment = context.lexical_environment;
 }
 
+void Interpreter::restore_scheduled_jump()
+{
+    m_scheduled_jump = vm().running_execution_context().previously_scheduled_jumps.take_last();
+}
+
+void Interpreter::leave_finally()
+{
+    reg(Register::exception()) = {};
+    m_scheduled_jump = vm().running_execution_context().previously_scheduled_jumps.take_last();
+}
+
 void Interpreter::enter_object_environment(Object& object)
 {
-    auto& old_environment = vm().running_execution_context().lexical_environment;
-    saved_lexical_environment_stack().append(old_environment);
-    vm().running_execution_context().lexical_environment = new_object_environment(object, true, old_environment);
+    auto& running_execution_context = vm().running_execution_context();
+    auto& old_environment = running_execution_context.lexical_environment;
+    running_execution_context.saved_lexical_environments.append(old_environment);
+    running_execution_context.lexical_environment = new_object_environment(object, true, old_environment);
 }
 
 ThrowCompletionOr<NonnullGCPtr<Bytecode::Executable>> compile(VM& vm, ASTNode const& node, ReadonlySpan<FunctionParameter> parameters, FunctionKind kind, DeprecatedFlyString const& name)
@@ -581,20 +561,6 @@ ThrowCompletionOr<NonnullGCPtr<Bytecode::Executable>> compile(VM& vm, ASTNode co
         bytecode_executable->dump();
 
     return bytecode_executable;
-}
-
-void Interpreter::push_call_frame(Variant<NonnullOwnPtr<CallFrame>, CallFrame*> frame)
-{
-    m_call_frames.append(move(frame));
-    m_current_call_frame = this->call_frame().registers();
-    reg(Register::return_value()) = {};
-}
-
-Variant<NonnullOwnPtr<CallFrame>, CallFrame*> Interpreter::pop_call_frame()
-{
-    auto frame = m_call_frames.take_last();
-    m_current_call_frame = m_call_frames.is_empty() ? Span<Value> {} : this->call_frame().registers();
-    return frame;
 }
 
 }
@@ -1039,7 +1005,8 @@ ThrowCompletionOr<void> CreateLexicalEnvironment::execute_impl(Bytecode::Interpr
         swap(old_environment, environment);
         return environment;
     };
-    interpreter.saved_lexical_environment_stack().append(make_and_swap_envs(interpreter.vm().running_execution_context().lexical_environment));
+    auto& running_execution_context = interpreter.vm().running_execution_context();
+    running_execution_context.saved_lexical_environments.append(make_and_swap_envs(running_execution_context.lexical_environment));
     return {};
 }
 
@@ -1053,6 +1020,18 @@ ThrowCompletionOr<void> EnterObjectEnvironment::execute_impl(Bytecode::Interpret
 ThrowCompletionOr<void> Catch::execute_impl(Bytecode::Interpreter& interpreter) const
 {
     interpreter.catch_exception(dst());
+    return {};
+}
+
+ThrowCompletionOr<void> LeaveFinally::execute_impl(Bytecode::Interpreter& interpreter) const
+{
+    interpreter.leave_finally();
+    return {};
+}
+
+ThrowCompletionOr<void> RestoreScheduledJump::execute_impl(Bytecode::Interpreter& interpreter) const
+{
+    interpreter.restore_scheduled_jump();
     return {};
 }
 
@@ -1453,7 +1432,8 @@ ThrowCompletionOr<void> ScheduleJump::execute_impl(Bytecode::Interpreter&) const
 
 ThrowCompletionOr<void> LeaveLexicalEnvironment::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    interpreter.vm().running_execution_context().lexical_environment = interpreter.saved_lexical_environment_stack().take_last();
+    auto& running_execution_context = interpreter.vm().running_execution_context();
+    running_execution_context.lexical_environment = running_execution_context.saved_lexical_environments.take_last();
     return {};
 }
 
@@ -1643,9 +1623,10 @@ ThrowCompletionOr<void> BlockDeclarationInstantiation::execute_impl(Bytecode::In
 {
     auto& vm = interpreter.vm();
     auto old_environment = vm.running_execution_context().lexical_environment;
-    interpreter.saved_lexical_environment_stack().append(old_environment);
-    vm.running_execution_context().lexical_environment = new_declarative_environment(*old_environment);
-    m_scope_node.block_declaration_instantiation(vm, vm.running_execution_context().lexical_environment);
+    auto& running_execution_context = vm.running_execution_context();
+    running_execution_context.saved_lexical_environments.append(old_environment);
+    running_execution_context.lexical_environment = new_declarative_environment(*old_environment);
+    m_scope_node.block_declaration_instantiation(vm, running_execution_context.lexical_environment);
     return {};
 }
 
@@ -2263,6 +2244,16 @@ ByteString Catch::to_byte_string_impl(Bytecode::Executable const& executable) co
 {
     return ByteString::formatted("Catch {}",
         format_operand("dst"sv, m_dst, executable));
+}
+
+ByteString LeaveFinally::to_byte_string_impl(Bytecode::Executable const&) const
+{
+    return ByteString::formatted("LeaveFinally");
+}
+
+ByteString RestoreScheduledJump::to_byte_string_impl(Bytecode::Executable const&) const
+{
+    return ByteString::formatted("RestoreScheduledJump");
 }
 
 ByteString GetObjectFromIteratorRecord::to_byte_string_impl(Bytecode::Executable const& executable) const

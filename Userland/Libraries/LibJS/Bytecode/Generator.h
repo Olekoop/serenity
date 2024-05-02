@@ -209,6 +209,7 @@ public:
         Continue,
         Unwind,
         ReturnToFinally,
+        LeaveFinally,
         LeaveLexicalEnvironment,
     };
     template<typename OpType>
@@ -232,6 +233,9 @@ public:
                 break;
             case ReturnToFinally:
                 return;
+            case LeaveFinally:
+                emit<Bytecode::Op::LeaveFinally>();
+                break;
             };
         }
     }
@@ -275,6 +279,8 @@ public:
         m_constants.append(value);
         return Operand(Operand::Type::Constant, m_constants.size() - 1);
     }
+
+    UnwindContext const* current_unwind_context() const { return m_current_unwind_context; }
 
 private:
     VM& m_vm;

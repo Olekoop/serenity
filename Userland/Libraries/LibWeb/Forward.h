@@ -8,7 +8,6 @@
 #pragma once
 
 #include <LibJS/Forward.h>
-#include <LibWeb/Bindings/Forward.h>
 
 namespace Web {
 class EditEventHandler;
@@ -682,7 +681,13 @@ class Table;
 
 namespace Web::WebAudio {
 class AudioContext;
+class AudioNode;
+class AudioParam;
+class AudioScheduledSourceNode;
 class BaseAudioContext;
+class OfflineAudioContext;
+class OscillatorNode;
+class PeriodicWave;
 
 enum class AudioContextState;
 

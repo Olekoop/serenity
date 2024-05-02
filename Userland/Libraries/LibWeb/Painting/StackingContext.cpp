@@ -55,6 +55,12 @@ void StackingContext::sort()
         child->sort();
 }
 
+void StackingContext::set_last_paint_generation_id(u64 generation_id)
+{
+    VERIFY(!m_last_paint_generation_id.has_value() || m_last_paint_generation_id.value() < generation_id);
+    m_last_paint_generation_id = generation_id;
+}
+
 static PaintPhase to_paint_phase(StackingContext::StackingContextPaintPhase phase)
 {
     // There are not a fully correct mapping since some stacking context phases are combined.
@@ -107,9 +113,9 @@ void StackingContext::paint_descendants(PaintContext& context, Paintable const& 
             return;
         }
 
-        if (stacking_context && z_index.has_value())
+        if (stacking_context && z_index.value_or(0) != 0)
             return;
-        if (child.is_positioned() && !z_index.has_value())
+        if (child.is_positioned() && z_index.value_or(0) == 0)
             return;
 
         if (stacking_context) {
@@ -170,6 +176,8 @@ void StackingContext::paint_descendants(PaintContext& context, Paintable const& 
 
 void StackingContext::paint_child(PaintContext& context, StackingContext const& child)
 {
+    const_cast<StackingContext&>(child).set_last_paint_generation_id(context.paint_generation_id());
+
     auto parent_paintable = child.paintable().parent();
     if (parent_paintable)
         parent_paintable->before_children_paint(context, PaintPhase::Foreground);

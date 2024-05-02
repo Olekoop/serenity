@@ -22,6 +22,7 @@
 #include <LibWeb/Animations/AnimationPlaybackEvent.h>
 #include <LibWeb/Animations/AnimationTimeline.h>
 #include <LibWeb/Animations/DocumentTimeline.h>
+#include <LibWeb/Bindings/DocumentPrototype.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/CSS/AnimationEvent.h>
 #include <LibWeb/CSS/CSSAnimation.h>
@@ -2561,10 +2562,10 @@ void Document::evaluate_media_rules()
         return;
 
     bool any_media_queries_changed_match_state = false;
-    for (auto& style_sheet : style_sheets().sheets()) {
-        if (style_sheet->evaluate_media_queries(*window))
+    for_each_css_style_sheet([&](CSS::CSSStyleSheet& style_sheet) {
+        if (style_sheet.evaluate_media_queries(*window))
             any_media_queries_changed_match_state = true;
-    }
+    });
 
     if (any_media_queries_changed_match_state) {
         style_computer().invalidate_rule_cache();
@@ -4896,14 +4897,16 @@ WebIDL::ExceptionOr<void> Document::set_adopted_style_sheets(JS::Value new_value
 
 void Document::for_each_css_style_sheet(Function<void(CSS::CSSStyleSheet&)>&& callback) const
 {
-    for (auto& style_sheet : m_style_sheets->sheets()) {
-        if (!(style_sheet->is_alternate() && style_sheet->disabled()))
-            callback(*style_sheet);
+    if (m_style_sheets) {
+        for (auto& style_sheet : m_style_sheets->sheets()) {
+            if (!(style_sheet->is_alternate() && style_sheet->disabled()))
+                callback(*style_sheet);
+        }
     }
 
     if (m_adopted_style_sheets) {
         m_adopted_style_sheets->for_each<CSS::CSSStyleSheet>([&](auto& style_sheet) {
-            if (!(style_sheet.is_alternate() && style_sheet.disabled()))
+            if (!style_sheet.disabled())
                 callback(style_sheet);
         });
     }

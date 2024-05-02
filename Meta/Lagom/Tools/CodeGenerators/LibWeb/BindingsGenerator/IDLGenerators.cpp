@@ -33,7 +33,11 @@ static bool is_platform_object(Type const& type)
         "AnimationEffect"sv,
         "AnimationTimeline"sv,
         "Attr"sv,
+        "AudioNode"sv,
+        "AudioParam"sv,
+        "AudioScheduledSourceNode"sv,
         "AudioTrack"sv,
+        "BaseAudioContext"sv,
         "Blob"sv,
         "CanvasGradient"sv,
         "CanvasPattern"sv,
@@ -63,6 +67,7 @@ static bool is_platform_object(Type const& type)
         "Path2D"sv,
         "PerformanceEntry"sv,
         "PerformanceMark"sv,
+        "PeriodicWave"sv,
         "PointerEvent"sv,
         "ReadableStreamBYOBReader"sv,
         "ReadableStreamDefaultReader"sv,
@@ -4565,6 +4570,7 @@ void generate_global_mixin_implementation(IDL::Interface const& interface, Strin
     SourceGenerator generator { builder };
 
     generator.set("class_name", interface.global_mixin_class);
+    generator.set("prototype_name", interface.prototype_class);
 
     generator.append(R"~~~(
 #include <AK/Function.h>
@@ -4579,6 +4585,7 @@ void generate_global_mixin_implementation(IDL::Interface const& interface, Strin
 #include <LibJS/Runtime/Value.h>
 #include <LibJS/Runtime/ValueInlines.h>
 #include <LibWeb/Bindings/@class_name@.h>
+#include <LibWeb/Bindings/@prototype_name@.h>
 #include <LibWeb/Bindings/ExceptionOrUtils.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/DOM/Element.h>
